@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import BinaryIO
 
-import fitz  # PyMuPDF
+import pymupdf
 from docx import Document
 
 
@@ -15,7 +15,7 @@ def extract_text_from_pdf(file_obj: BinaryIO) -> str:
     file_obj.seek(0)
 
     pdf_bytes = file_obj.read()
-    document = fitz.open(stream=pdf_bytes, filetype="pdf")
+    document = pymupdf.open(stream=pdf_bytes, filetype="pdf")
 
     try:
         pages = [page.get_text("text") for page in document]
@@ -72,15 +72,11 @@ def extract_resume_text(file_obj: BinaryIO, filename: str) -> str:
 
     if extension == ".pdf":
         text = extract_text_from_pdf(file_obj)
-
     elif extension == ".docx":
         text = extract_text_from_docx(file_obj)
-
     elif extension == ".txt":
         text = extract_text_from_txt(file_obj)
-
     else:
-        # Defensive fallback; normally unreachable.
         raise ValueError(f"Unsupported file format: {extension}")
 
     if not text:
@@ -93,9 +89,7 @@ def extract_resume_text(file_obj: BinaryIO, filename: str) -> str:
 
 
 def clean_extracted_text(text: str) -> str:
-    """
-    Clean common formatting problems produced during extraction.
-    """
+    """Clean common formatting problems produced during extraction."""
     if not text:
         return ""
 
@@ -111,9 +105,7 @@ def clean_extracted_text(text: str) -> str:
 
 
 def get_resume_statistics(text: str) -> dict:
-    """
-    Return basic statistics for the extracted resume text.
-    """
+    """Return basic statistics for the extracted resume text."""
     cleaned_text = clean_extracted_text(text)
 
     words = cleaned_text.split()
