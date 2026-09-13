@@ -1,264 +1,258 @@
 from __future__ import annotations
 
+import json
 import os
 from typing import Any
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 
-DEFAULT_MODEL = "gemini-2.0-flash"
+DEFAULT_MODEL = "gemini-3.5-flash-lite"
 
 
-def configure_gemini(api_key: str | None = None) -> bool:
+def configure_gemini(api_key: str | None = None):
     """
-    Configure Gemini using an API key.
+    Create and return a Gemini client.
 
-    The API key can be passed directly or loaded from
-    the GEMINI_API_KEY environment variable.
+    API key priority:
+    1. Explicit api_key argument
+    2. GEMINI_API_KEY environment variable
     """
+
     key = api_key or os.getenv("GEMINI_API_KEY")
 
     if not key:
-        return False
+        raise ValueError(
+            "GEMINI_API_KEY is not configured."
+        )
 
-    genai.configure(api_key=key)
-    return True
+    return genai.Client(api_key=key)
 
 
-def _get_model(model_name: str = DEFAULT_MODEL):
-    """Create and return the Gemini model."""
-    return genai.GenerativeModel(model_name)
+def _get_model_client(
+    api_key: str | None = None,
+):
+    return configure_gemini(api_key)
 
 
 def build_resume_analysis_prompt(
     resume_text: str,
-    job_description: str | None = None,
+    job_description: str = "",
 ) -> str:
-    """Build a structured prompt for Gemini resume analysis."""
+    """
+    Build the prompt used for resume analysis.
+    """
 
     job_context = ""
 
-    if job_description:
+    if job_description.strip():
         job_context = f"""
-JOB DESCRIPTION:
+TARGET JOB DESCRIPTION:
 {job_description}
 
 Analyze the resume specifically against this job description.
+Identify missing skills, missing keywords and alignment gaps.
 """
 
     return f"""
-You are an expert ATS resume reviewer and career coach.
+You are an expert ATS resume analyst and career coach.
 
 Analyze the following resume professionally.
-
-{job_context}
 
 RESUME:
 {resume_text}
 
-Provide your analysis using exactly these sections:
+{job_context}
 
-1. EXECUTIVE SUMMARY
-Give a concise overview of the candidate's profile.
+Provide a detailed but practical analysis.
 
-2. KEY STRENGTHS
-List the strongest aspects of the resume.
+Return ONLY valid JSON using exactly this structure:
 
-3. WEAKNESSES
-List important weaknesses or missing areas.
-
-4. ATS IMPROVEMENTS
-Explain how the resume can become more ATS-friendly.
-
-5. SKILL GAPS
-Identify important technical or professional skills that appear
-to be missing or insufficiently demonstrated.
-
-6. EXPERIENCE IMPROVEMENTS
-Suggest how experience/project descriptions can be made stronger.
-
-7. PROJECT IMPROVEMENTS
-Suggest improvements to projects, including technologies,
-impact, metrics, and outcomes where appropriate.
-
-8. KEYWORD RECOMMENDATIONS
-List relevant keywords that should be considered.
-
-9. ACTION PLAN
-Give 5 concrete actions the candidate should take next.
+{{
+    "summary": "A concise professional summary of the resume.",
+    "overall_assessment": "Overall assessment of the resume.",
+    "strengths": [
+        "strength 1",
+        "strength 2",
+        "strength 3"
+    ],
+    "weaknesses": [
+        "weakness 1",
+        "weakness 2",
+        "weakness 3"
+    ],
+    "missing_keywords": [
+        "keyword 1",
+        "keyword 2"
+    ],
+    "missing_skills": [
+        "skill 1",
+        "skill 2"
+    ],
+    "recommendations": [
+        "specific recommendation 1",
+        "specific recommendation 2",
+        "specific recommendation 3"
+    ],
+    "ats_improvements": [
+        "ATS improvement 1",
+        "ATS improvement 2"
+    ],
+    "career_advice": [
+        "career advice 1",
+        "career advice 2"
+    ]
+}}
 
 Rules:
-- Do not invent candidate experience.
-- Do not claim the candidate has a skill unless the resume supports it.
-- Clearly distinguish missing information from actual weaknesses.
-- Keep recommendations practical.
-- Use professional and concise language.
+
+- Do not invent experience.
+- Do not invent skills that are not present.
+- Do not make false claims.
+- Base your analysis only on the provided resume.
+- Be specific and actionable.
+- Focus on improving employability.
+- If a job description is provided, prioritize job-specific gaps.
+- Keep each recommendation concise.
 """
+
+
+def _parse_json_response(
+    response_text: str,
+) -> dict[str, Any]:
+    """
+    Safely convert Gemini JSON output into a dictionary.
+    """
+
+    if not response_text:
+        return {
+            "summary": "",
+            "overall_assessment": "",
+            "strengths": [],
+            "weaknesses": [],
+            "missing_keywords": [],
+            "missing_skills": [],
+            "recommendations": [],
+            "ats_improvements": [],
+            "career_advice": [],
+        }
+
+    cleaned = response_text.strip()
+
+    if cleaned.startswith("```json"):
+        cleaned = cleaned[7:]
+
+    elif cleaned.startswith("```"):
+        cleaned = cleaned[3:]
+
+    if cleaned.endswith("```"):
+        cleaned = cleaned[:-3]
+
+    cleaned = cleaned.strip()
+
+    try:
+        result = json.loads(cleaned)
+
+        if isinstance(result, dict):
+            return result
+
+    except json.JSONDecodeError:
+        pass
+
+    return {
+        "summary": cleaned,
+        "overall_assessment": cleaned,
+        "strengths": [],
+        "weaknesses": [],
+        "missing_keywords": [],
+        "missing_skills": [],
+        "recommendations": [],
+        "ats_improvements": [],
+        "career_advice": [],
+    }
 
 
 def analyze_resume_with_ai(
     resume_text: str,
-    job_description: str | None = None,
+    job_description: str = "",
     api_key: str | None = None,
-    model_name: str = DEFAULT_MODEL,
 ) -> dict[str, Any]:
     """
     Analyze a resume using Gemini.
-
-    Returns a structured result rather than exposing raw API
-    exceptions to the application.
     """
+
     if not resume_text.strip():
-        return {
-            "success": False,
-            "analysis": "",
-            "error": "Resume text is empty.",
-        }
-
-    if not configure_gemini(api_key):
-        return {
-            "success": False,
-            "analysis": "",
-            "error": (
-                "Gemini API key was not found. "
-                "Configure GEMINI_API_KEY before using AI analysis."
-            ),
-        }
-
-    try:
-        model = _get_model(model_name)
-
-        prompt = build_resume_analysis_prompt(
-            resume_text=resume_text,
-            job_description=job_description,
+        raise ValueError(
+            "Resume text cannot be empty."
         )
 
-        response = model.generate_content(prompt)
+    client = _get_model_client(api_key)
 
-        analysis = getattr(response, "text", "")
+    prompt = build_resume_analysis_prompt(
+        resume_text=resume_text,
+        job_description=job_description,
+    )
 
-        if not analysis:
-            return {
-                "success": False,
-                "analysis": "",
-                "error": "Gemini returned an empty response.",
-            }
+    response = client.models.generate_content(
+        model=DEFAULT_MODEL,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            temperature=0.3,
+            max_output_tokens=2500,
+            response_mime_type="application/json",
+        ),
+    )
 
-        return {
-            "success": True,
-            "analysis": analysis.strip(),
-            "error": "",
-        }
-
-    except Exception as exc:
-        return {
-            "success": False,
-            "analysis": "",
-            "error": f"AI analysis failed: {exc}",
-        }
+    return _parse_json_response(
+        response.text
+    )
 
 
 def generate_resume_summary(
     resume_text: str,
     api_key: str | None = None,
-    model_name: str = DEFAULT_MODEL,
-) -> dict[str, Any]:
+) -> str:
     """
-    Generate a concise professional summary of a resume.
+    Generate a professional resume summary.
     """
-    if not resume_text.strip():
-        return {
-            "success": False,
-            "summary": "",
-            "error": "Resume text is empty.",
-        }
 
-    if not configure_gemini(api_key):
-        return {
-            "success": False,
-            "summary": "",
-            "error": "Gemini API key was not found.",
-        }
+    client = _get_model_client(api_key)
 
     prompt = f"""
-You are a professional resume writer.
+Write a professional 3-5 sentence summary of this resume.
 
-Create a concise professional summary based ONLY on the
-information contained in this resume.
+Do not invent information.
 
-RESUME:
+Resume:
 {resume_text}
-
-Requirements:
-- 3 to 5 sentences.
-- Professional tone.
-- Mention relevant technical skills.
-- Mention experience or education only when present.
-- Do not invent information.
 """
 
-    try:
-        model = _get_model(model_name)
-        response = model.generate_content(prompt)
+    response = client.models.generate_content(
+        model=DEFAULT_MODEL,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            temperature=0.4,
+            max_output_tokens=500,
+        ),
+    )
 
-        summary = getattr(response, "text", "")
-
-        if not summary:
-            return {
-                "success": False,
-                "summary": "",
-                "error": "Gemini returned an empty response.",
-            }
-
-        return {
-            "success": True,
-            "summary": summary.strip(),
-            "error": "",
-        }
-
-    except Exception as exc:
-        return {
-            "success": False,
-            "summary": "",
-            "error": f"Summary generation failed: {exc}",
-        }
+    return response.text.strip()
 
 
 def generate_job_match_recommendations(
     resume_text: str,
     job_description: str,
     api_key: str | None = None,
-    model_name: str = DEFAULT_MODEL,
-) -> dict[str, Any]:
+) -> str:
     """
-    Generate AI recommendations for improving a resume against
-    a specific job description.
+    Generate personalized recommendations for a target job.
     """
-    if not resume_text.strip():
-        return {
-            "success": False,
-            "recommendations": "",
-            "error": "Resume text is empty.",
-        }
 
-    if not job_description.strip():
-        return {
-            "success": False,
-            "recommendations": "",
-            "error": "Job description is empty.",
-        }
-
-    if not configure_gemini(api_key):
-        return {
-            "success": False,
-            "recommendations": "",
-            "error": "Gemini API key was not found.",
-        }
+    client = _get_model_client(api_key)
 
     prompt = f"""
-You are an expert technical recruiter.
-
-Compare this resume with the job description.
+Compare this resume against the target job description.
 
 RESUME:
 {resume_text}
@@ -268,38 +262,22 @@ JOB DESCRIPTION:
 
 Provide:
 
-1. Top matching qualifications
-2. Missing or weakly represented skills
+1. Matching strengths
+2. Missing skills
 3. Missing keywords
-4. Resume sections that should be improved
-5. Five specific changes that could improve job alignment
+4. Resume improvements
+5. Specific recommendations
 
-Do not invent qualifications.
-Only recommend changes supported by the job description.
+Do not invent experience or qualifications.
 """
 
-    try:
-        model = _get_model(model_name)
-        response = model.generate_content(prompt)
+    response = client.models.generate_content(
+        model=DEFAULT_MODEL,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            temperature=0.3,
+            max_output_tokens=1500,
+        ),
+    )
 
-        recommendations = getattr(response, "text", "")
-
-        if not recommendations:
-            return {
-                "success": False,
-                "recommendations": "",
-                "error": "Gemini returned an empty response.",
-            }
-
-        return {
-            "success": True,
-            "recommendations": recommendations.strip(),
-            "error": "",
-        }
-
-    except Exception as exc:
-        return {
-            "success": False,
-            "recommendations": "",
-            "error": f"Job matching analysis failed: {exc}",
-        }
+    return response.text.strip()

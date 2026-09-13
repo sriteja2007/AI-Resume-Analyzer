@@ -1,146 +1,261 @@
 from __future__ import annotations
 
 import re
-from collections import Counter
-from typing import Iterable
+from typing import Any
+
+from src.skill_extractor import extract_skills
+
+
+# Common job-related keywords
+JOB_KEYWORDS = {
+    "python",
+    "java",
+    "c",
+    "c++",
+    "javascript",
+    "typescript",
+    "html",
+    "css",
+    "react",
+    "next.js",
+    "node.js",
+    "express",
+    "mongodb",
+    "mysql",
+    "postgresql",
+    "sql",
+    "git",
+    "github",
+    "docker",
+    "aws",
+    "azure",
+    "gcp",
+    "machine learning",
+    "deep learning",
+    "artificial intelligence",
+    "data science",
+    "data analysis",
+    "tensorflow",
+    "pytorch",
+    "scikit-learn",
+    "pandas",
+    "numpy",
+    "nlp",
+    "computer vision",
+    "cloud computing",
+    "rest api",
+    "api",
+    "communication",
+    "leadership",
+    "problem solving",
+    "teamwork",
+    "project management",
+}
 
 
 def normalize_text(text: str) -> str:
     """Normalize text for matching."""
+
     if not text:
         return ""
 
     text = text.lower()
-    text = text.replace("–", "-")
-    text = text.replace("—", "-")
+
+    # Normalize common technology variations
+    replacements = {
+        "node js": "node.js",
+        "nodejs": "node.js",
+        "next js": "next.js",
+        "nextjs": "next.js",
+        "machine-learning": "machine learning",
+        "deep-learning": "deep learning",
+        "artificial-intelligence": "artificial intelligence",
+    }
+
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+
     text = re.sub(r"\s+", " ", text)
 
     return text.strip()
 
 
-def tokenize(text: str) -> list[str]:
-    """Convert text into searchable tokens."""
+def tokenize_text(text: str) -> set[str]:
+    """Convert text into normalized tokens."""
+
     normalized = normalize_text(text)
 
     if not normalized:
-        return []
+        return set()
 
-    return re.findall(
-        r"[a-zA-Z0-9+#./-]+",
-        normalized,
+    return set(
+        re.findall(
+            r"[a-zA-Z0-9+#.]+",
+            normalized,
+        )
     )
 
 
-def extract_keywords(
-    text: str,
-    candidate_keywords: Iterable[str],
+def extract_job_keywords(
+    job_description: str,
 ) -> list[str]:
-    """
-    Find which candidate keywords occur in a text.
-    """
-    normalized_text = normalize_text(text)
+    """Extract important keywords from a job description."""
+
+    normalized = normalize_text(
+        job_description
+    )
+
     found = []
 
-    for keyword in candidate_keywords:
-        normalized_keyword = normalize_text(keyword)
-
-        if not normalized_keyword:
-            continue
-
-        escaped = re.escape(normalized_keyword)
-        pattern = rf"(?<![a-z0-9+#]){escaped}(?![a-z0-9+#])"
-
-        if re.search(pattern, normalized_text):
+    for keyword in JOB_KEYWORDS:
+        if keyword in normalized:
             found.append(keyword)
 
-    return sorted(set(found), key=str.lower)
+    return sorted(
+        found,
+        key=len,
+        reverse=True,
+    )
+
+
+def extract_required_skills(
+    job_description: str,
+) -> list[str]:
+    """
+    Extract technical and soft skills from the
+    job description using the same skill engine
+    used for resumes.
+    """
+
+    if not job_description.strip():
+        return []
+
+    extracted = extract_skills(
+        job_description
+    )
+
+    technical = extracted.get(
+        "technical_skills",
+        [],
+    )
+
+    soft = extracted.get(
+        "soft_skills",
+        [],
+    )
+
+    all_skills = extracted.get(
+        "all_skills",
+        [],
+    )
+
+    # Prefer all_skills if available.
+    if all_skills:
+        return sorted(
+            set(all_skills),
+            key=str.lower,
+        )
+
+    return sorted(
+        set(technical + soft),
+        key=str.lower,
+    )
 
 
 def calculate_keyword_overlap(
     resume_text: str,
     job_description: str,
-) -> dict[str, object]:
-    """
-    Compare resume keywords against the words found in a job description.
-    """
-    resume_tokens = set(tokenize(resume_text))
-    job_tokens = set(tokenize(job_description))
+) -> dict[str, Any]:
+    """Calculate keyword overlap between resume and job."""
 
-    if not job_tokens:
-        return {
-            "matched_keywords": [],
-            "missing_keywords": [],
-            "match_percentage": 0.0,
-        }
-
-    matched = sorted(
-        resume_tokens.intersection(job_tokens)
+    resume_normalized = normalize_text(
+        resume_text
     )
 
-    missing = sorted(
-        job_tokens.difference(resume_tokens)
+    job_keywords = extract_job_keywords(
+        job_description
     )
 
-    percentage = round(
-        (len(matched) / len(job_tokens)) * 100,
-        2,
-    )
+    matched = []
+    missing = []
+
+    for keyword in job_keywords:
+        if keyword in resume_normalized:
+            matched.append(keyword)
+        else:
+            missing.append(keyword)
+
+    if job_keywords:
+        score = (
+            len(matched)
+            / len(job_keywords)
+            * 100
+        )
+    else:
+        score = 0.0
 
     return {
+        "job_keywords": job_keywords,
         "matched_keywords": matched,
         "missing_keywords": missing,
-        "match_percentage": percentage,
+        "keyword_match_score": round(
+            score,
+            2,
+        ),
     }
 
 
 def calculate_skill_match(
-    resume_skills: Iterable[str],
-    required_skills: Iterable[str],
-) -> dict[str, object]:
-    """
-    Compare skills detected in a resume with required job skills.
-    """
-    resume_map = {
-        skill.strip().lower(): skill.strip()
+    resume_skills: list[str],
+    required_skills: list[str],
+) -> dict[str, Any]:
+    """Compare resume skills with job-required skills."""
+
+    resume_set = {
+        normalize_text(skill)
         for skill in resume_skills
-        if skill and skill.strip()
     }
 
-    required_map = {
-        skill.strip().lower(): skill.strip()
+    required_set = {
+        normalize_text(skill)
         for skill in required_skills
-        if skill and skill.strip()
     }
 
-    if not required_map:
-        return {
-            "matched_skills": [],
-            "missing_skills": [],
-            "skill_match_percentage": 0.0,
-        }
-
-    matched_keys = set(resume_map).intersection(required_map)
-    missing_keys = set(required_map).difference(resume_map)
-
-    matched_skills = sorted(
-        [required_map[key] for key in matched_keys],
-        key=str.lower,
+    matched = sorted(
+        [
+            skill
+            for skill in required_set
+            if skill in resume_set
+        ]
     )
 
-    missing_skills = sorted(
-        [required_map[key] for key in missing_keys],
-        key=str.lower,
+    missing = sorted(
+        [
+            skill
+            for skill in required_set
+            if skill not in resume_set
+        ]
     )
 
-    percentage = round(
-        (len(matched_keys) / len(required_map)) * 100,
-        2,
-    )
+    if required_set:
+        score = (
+            len(matched)
+            / len(required_set)
+            * 100
+        )
+    else:
+        score = 0.0
 
     return {
-        "matched_skills": matched_skills,
-        "missing_skills": missing_skills,
-        "skill_match_percentage": percentage,
+        "required_skills": sorted(
+            required_set
+        ),
+        "matched_skills": matched,
+        "missing_skills": missing,
+        "skill_match_score": round(
+            score,
+            2,
+        ),
     }
 
 
@@ -149,118 +264,269 @@ def calculate_text_similarity(
     job_description: str,
 ) -> float:
     """
-    Calculate a lightweight cosine-style similarity based on word frequency.
+    Lightweight token-overlap similarity.
 
-    This does not require a machine-learning model and provides a useful
-    baseline before adding semantic embeddings.
+    This is intentionally simple and explainable.
     """
-    resume_tokens = tokenize(resume_text)
-    job_tokens = tokenize(job_description)
+
+    resume_tokens = tokenize_text(
+        resume_text
+    )
+
+    job_tokens = tokenize_text(
+        job_description
+    )
 
     if not resume_tokens or not job_tokens:
         return 0.0
 
-    resume_counter = Counter(resume_tokens)
-    job_counter = Counter(job_tokens)
-
-    vocabulary = set(resume_counter).union(job_counter)
-
-    resume_vector = [
-        resume_counter.get(word, 0)
-        for word in vocabulary
-    ]
-
-    job_vector = [
-        job_counter.get(word, 0)
-        for word in vocabulary
-    ]
-
-    dot_product = sum(
-        a * b
-        for a, b in zip(resume_vector, job_vector)
+    intersection = (
+        resume_tokens & job_tokens
     )
 
-    resume_magnitude = sum(
-        value * value
-        for value in resume_vector
-    ) ** 0.5
+    union = (
+        resume_tokens | job_tokens
+    )
 
-    job_magnitude = sum(
-        value * value
-        for value in job_vector
-    ) ** 0.5
-
-    if resume_magnitude == 0 or job_magnitude == 0:
+    if not union:
         return 0.0
 
     similarity = (
-        dot_product
-        / (resume_magnitude * job_magnitude)
-    )
-
-    return round(similarity * 100, 2)
-
-
-def calculate_match_score(
-    skill_match_percentage: float,
-    keyword_match_percentage: float,
-    text_similarity: float,
-) -> float:
-    """
-    Calculate the overall resume-to-job match score.
-    """
-    score = (
-        skill_match_percentage * 0.50
-        + keyword_match_percentage * 0.30
-        + text_similarity * 0.20
+        len(intersection)
+        / len(union)
+        * 100
     )
 
     return round(
-        max(0.0, min(100.0, score)),
+        similarity,
         2,
     )
+
+
+def calculate_overall_match_score(
+    keyword_score: float,
+    skill_score: float,
+    similarity_score: float,
+) -> float:
+    """
+    Calculate overall job match score.
+
+    Weighting:
+    - Skills: 45%
+    - Keywords: 35%
+    - Text similarity: 20%
+    """
+
+    score = (
+        skill_score * 0.45
+        + keyword_score * 0.35
+        + similarity_score * 0.20
+    )
+
+    return round(
+        max(
+            0.0,
+            min(
+                100.0,
+                score,
+            ),
+        ),
+        2,
+    )
+
+
+def generate_recommendations(
+    missing_skills: list[str],
+    missing_keywords: list[str],
+    keyword_score: float,
+    skill_score: float,
+) -> list[str]:
+    """Generate actionable job-match recommendations."""
+
+    recommendations = []
+
+    if missing_skills:
+        skills_text = ", ".join(
+            missing_skills[:8]
+        )
+
+        recommendations.append(
+            f"Consider adding relevant skills such as {skills_text} "
+            "if you genuinely have experience with them."
+        )
+
+    if missing_keywords:
+        keywords_text = ", ".join(
+            missing_keywords[:8]
+        )
+
+        recommendations.append(
+            f"Review your resume for relevant job keywords such as "
+            f"{keywords_text} and include them naturally where accurate."
+        )
+
+    if skill_score < 50:
+        recommendations.append(
+            "Your resume currently shows limited alignment "
+            "with the required skills for this role."
+        )
+
+    elif skill_score < 75:
+        recommendations.append(
+            "Your skill alignment is moderate. Highlight your "
+            "strongest matching technologies more prominently."
+        )
+
+    else:
+        recommendations.append(
+            "Your resume demonstrates strong alignment with "
+            "the technical and professional skills detected."
+        )
+
+    if keyword_score < 50:
+        recommendations.append(
+            "Improve keyword alignment by tailoring your resume "
+            "to the terminology used in the target job description."
+        )
+
+    elif keyword_score < 75:
+        recommendations.append(
+            "Your keyword alignment is moderate. Tailor relevant "
+            "experience and project descriptions to the target role."
+        )
+
+    return recommendations
 
 
 def analyze_job_match(
     resume_text: str,
     job_description: str,
-    resume_skills: Iterable[str] | None = None,
-    required_skills: Iterable[str] | None = None,
-) -> dict[str, object]:
-    """
-    Run the complete resume-to-job matching analysis.
-    """
-    resume_skills = list(resume_skills or [])
-    required_skills = list(required_skills or [])
+    resume_skills: list[str] | None = None,
+) -> dict[str, Any]:
+    """Perform complete resume-to-job matching."""
 
-    skill_results = calculate_skill_match(
+    if not resume_text.strip():
+        return {
+            "overall_match_score": 0.0,
+            "keyword_match_score": 0.0,
+            "skill_match_score": 0.0,
+            "text_similarity_score": 0.0,
+            "job_keywords": [],
+            "matched_keywords": [],
+            "missing_keywords": [],
+            "required_skills": [],
+            "matched_skills": [],
+            "missing_skills": [],
+            "recommendations": [],
+        }
+
+    if not job_description.strip():
+        return {
+            "overall_match_score": 0.0,
+            "keyword_match_score": 0.0,
+            "skill_match_score": 0.0,
+            "text_similarity_score": 0.0,
+            "job_keywords": [],
+            "matched_keywords": [],
+            "missing_keywords": [],
+            "required_skills": [],
+            "matched_skills": [],
+            "missing_skills": [],
+            "recommendations": [
+                "Add a job description to perform job matching."
+            ],
+        }
+
+    if resume_skills is None:
+        resume_result = extract_skills(
+            resume_text
+        )
+
+        resume_skills = resume_result.get(
+            "all_skills",
+            [],
+        )
+
+    keyword_result = calculate_keyword_overlap(
+        resume_text,
+        job_description,
+    )
+
+    required_skills = extract_required_skills(
+        job_description
+    )
+
+    skill_result = calculate_skill_match(
         resume_skills,
         required_skills,
     )
 
-    keyword_results = calculate_keyword_overlap(
+    similarity_score = calculate_text_similarity(
         resume_text,
         job_description,
     )
 
-    similarity = calculate_text_similarity(
-        resume_text,
-        job_description,
+    overall_score = calculate_overall_match_score(
+        keyword_score=keyword_result[
+            "keyword_match_score"
+        ],
+        skill_score=skill_result[
+            "skill_match_score"
+        ],
+        similarity_score=similarity_score,
     )
 
-    overall_score = calculate_match_score(
-        skill_match_percentage=float(
-            skill_results["skill_match_percentage"]
-        ),
-        keyword_match_percentage=float(
-            keyword_results["match_percentage"]
-        ),
-        text_similarity=similarity,
+    recommendations = generate_recommendations(
+        missing_skills=skill_result[
+            "missing_skills"
+        ],
+        missing_keywords=keyword_result[
+            "missing_keywords"
+        ],
+        keyword_score=keyword_result[
+            "keyword_match_score"
+        ],
+        skill_score=skill_result[
+            "skill_match_score"
+        ],
     )
 
     return {
         "overall_match_score": overall_score,
-        "skill_match": skill_results,
-        "keyword_match": keyword_results,
-        "text_similarity": similarity,
+
+        "keyword_match_score": keyword_result[
+            "keyword_match_score"
+        ],
+
+        "skill_match_score": skill_result[
+            "skill_match_score"
+        ],
+
+        "text_similarity_score": similarity_score,
+
+        "job_keywords": keyword_result[
+            "job_keywords"
+        ],
+
+        "matched_keywords": keyword_result[
+            "matched_keywords"
+        ],
+
+        "missing_keywords": keyword_result[
+            "missing_keywords"
+        ],
+
+        "required_skills": skill_result[
+            "required_skills"
+        ],
+
+        "matched_skills": skill_result[
+            "matched_skills"
+        ],
+
+        "missing_skills": skill_result[
+            "missing_skills"
+        ],
+
+        "recommendations": recommendations,
     }
